@@ -2,7 +2,7 @@
 
 lazydocs: ignore
 """
-
+import logging
 from typing import Dict, List
 
 
@@ -69,14 +69,14 @@ def is_multi_enum_property(property: Dict, references: Dict) -> bool:
 
     try:
         # Uses literal
-        _ = property["items"]["enum"]
+        _ = get_property_items(property)["enum"]
         return True
     except Exception:
         pass
 
     try:
         # Uses enum
-        _ = resolve_reference(property["items"]["$ref"], references)["enum"]
+        _ = resolve_reference(get_property_items(property)["$ref"], references)["enum"]
         return True
     except Exception:
         return False
@@ -115,7 +115,7 @@ def is_multi_file_property(property: Dict) -> bool:
 
     try:
         # TODO: binary
-        return property["items"]["format"] == "byte"
+        return get_property_items(property)["format"] == "byte"
     except Exception:
         return False
 
@@ -147,27 +147,38 @@ def is_union_property(property: Dict) -> bool:
     return True
 
 
-def is_property_list(property: Dict) -> bool:
+def is_property_list_and_object(property: Dict, references) -> bool:
     if property.get("type") != "array":
         return False
 
-    if property.get("items") is None:
+    if property.get("items") is None and property.get("anyOf", [{}])[0].get("items") is None:
         return False
 
     try:
-        return property["items"]["type"] in ["string", "number", "integer"]
-    except Exception:
-        return False
+        item_property = get_property_items(property)
+    except (KeyError, TypeError):
+        item_property = get_property_items(property.get("anyOf")[0])
+
+    # Check if it is an object
+    if "$ref" in item_property:
+        object_reference = resolve_reference(item_property["$ref"], references)
+        if object_reference["type"] in ["string", "number", "integer"]:
+            item_property.pop("$ref")
+            item_property["type"] = object_reference["type"]
+        elif object_reference["type"] != "object":
+            raise TypeError(f"Type of array-like field not supported: {object_reference['type']}")
+        else:
+            property["items"] = item_property
+            return "properties" in object_reference
+    if item_property.get("type") in ["string", "number", "integer"]:
+        property["items"] = item_property
+        return True
+    return False
 
 
-def is_object_list_property(property: Dict, references: Dict) -> bool:
-    if property.get("type") != "array":
-        return False
-
-    try:
-        object_reference = resolve_reference(property["items"]["$ref"], references)
-        if object_reference["type"] != "object":
-            return False
-        return "properties" in object_reference
-    except Exception:
-        return False
+def get_property_items(property):
+    if isinstance(property["items"], list):
+        return property["items"][0]
+    if isinstance(property["items"], dict):
+        return property["items"]
+    raise TypeError(f"Given type of items is not supported: {property['items']}")

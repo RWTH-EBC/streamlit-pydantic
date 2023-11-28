@@ -3,6 +3,7 @@ import dataclasses
 import datetime
 import inspect
 import json
+import logging
 import mimetypes
 import re
 from enum import Enum
@@ -10,14 +11,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar
 
 import pandas as pd
 import streamlit as st
+import numpy as np
+
 from pydantic import BaseModel, ValidationError, parse_obj_as
-from pydantic.color import Color
 from pydantic.json import pydantic_encoder
 
 from streamlit_pydantic import schema_utils
 
 _OVERWRITE_STREAMLIT_KWARGS_PREFIX = "st_kwargs_"
 
+
+logger = logging.getLogger(__name__)
 
 def _name_to_title(name: str) -> str:
     """Converts a camelCase or snake_case name to title case."""
@@ -79,6 +83,7 @@ class InputUI:
         group_optional_fields: GroupOptionalFieldsStrategy = "no",  # type: ignore
         lowercase_labels: bool = False,
         ignore_empty_values: bool = False,
+        custom_defaults: dict = None
     ):
         self._key = key
 
@@ -111,14 +116,20 @@ class InputUI:
 
         else:
             self._input_class = model
-
-        self._schema_properties = self._input_class.schema(by_alias=True).get(
+        print(self._input_class)
+        self._schema_properties = self._input_class.model_json_schema(by_alias=True).get(
             "properties", {}
         )
-        self._schema_references = self._input_class.schema(by_alias=True).get(
-            "$defs", {}
-        )
+        if custom_defaults is not None:
+            for property, new_default in custom_defaults.items():
+                self._schema_properties[property]["default"] = new_default
 
+        self._schema_references = self._input_class.model_json_schema(by_alias=True).get(
+            "definitions", {}
+        )
+        self._schema_references.update(self._input_class.model_json_schema(by_alias=True).get(
+            "$defs", {}
+        ))
         # TODO: check if state has input data
 
     def render_ui(self) -> Dict:
@@ -130,7 +141,7 @@ class InputUI:
             ).dict()
             return self._session_state[self._session_input_key]
 
-        required_properties = self._input_class.schema(by_alias=True).get(
+        required_properties = self._input_class.model_json_schema(by_alias=True).get(
             "required", []
         )
 
@@ -138,8 +149,8 @@ class InputUI:
 
         # check if the input_class is an instance and build value dicts
         if isinstance(self._input_class, BaseModel):
-            instance_dict = self._input_class.dict()
-            instance_dict_by_alias = self._input_class.dict(by_alias=True)
+            instance_dict = self._input_class.model_dump()
+            instance_dict_by_alias = self._input_class.model_dump(by_alias=True)
         else:
             instance_dict = None
             instance_dict_by_alias = None
@@ -173,12 +184,9 @@ class InputUI:
                     if attr is not None:
                         property["instance_class"] = str(type(attr))
 
-            try:
-                value = self._render_property(streamlit_app, property_key, property)
-                if not self._is_value_ignored(property_key, value):
-                    self._store_value(property_key, value)
-            except Exception:
-                pass
+            value = self._render_property(streamlit_app, property_key, property)
+            if not self._is_value_ignored(property_key, value):
+                self._store_value(property_key, value)
 
         if properties_in_expander:
             # Render optional properties in expander
@@ -200,8 +208,8 @@ class InputUI:
                         if not self._is_value_ignored(property_key, value):
                             self._store_value(property_key, value)
 
-                    except Exception:
-                        pass
+                    except Exception as err:
+                        raise err#print(f"Exception: {err}")
 
         return self._session_state[self._session_input_key]
 
@@ -441,11 +449,6 @@ class InputUI:
         elif property.get("example") is not None:
             streamlit_kwargs["value"] = property["example"]
 
-        if isinstance(streamlit_kwargs.get("value"), Color):
-            streamlit_kwargs["value"] = streamlit_kwargs["value"].as_hex()
-        elif isinstance(streamlit_kwargs.get("value"), str):
-            streamlit_kwargs["value"] = Color(streamlit_kwargs["value"]).as_hex()
-
         if property.get("format") == "text":
             # Use text input if specified format is text
             return streamlit_app.text_input(**{**streamlit_kwargs, **overwrite_kwargs})
@@ -468,7 +471,7 @@ class InputUI:
         else:
             # Using Enum
             reference_item = schema_utils.resolve_reference(
-                property["items"]["$ref"], self._schema_references
+                schema_utils.get_property_items(property)["$ref"], self._schema_references
             )
             select_options = reference_item["enum"]
 
@@ -477,8 +480,8 @@ class InputUI:
         elif property.get("default"):
             try:
                 streamlit_kwargs["default"] = property.get("default")
-            except Exception:
-                pass
+            except Exception as err:
+                raise err#print(f"Exception: {err}")
 
         return streamlit_app.multiselect(
             **{**streamlit_kwargs, "options": select_options, **overwrite_kwargs}
@@ -508,9 +511,8 @@ class InputUI:
                 streamlit_kwargs["index"] = select_options.index(
                     property.get("default")  # type: ignore
                 )
-            except Exception:
-                # Use default selection
-                pass
+            except Exception as err:
+                raise err#print(f"Exception: {err}")
 
         # if there is only one option then there is no choice for the user to be make
         # so simply return the value (This is relevant for discriminator properties)
@@ -533,8 +535,6 @@ class InputUI:
             data_dict = self._get_value(key)
         elif property.get("init_value"):
             data_dict = property.get("init_value")
-        elif property.get("default"):
-            data_dict = property.get("default")
         else:
             data_dict = {}
 
@@ -734,6 +734,10 @@ class InputUI:
             streamlit_kwargs["value"] = number_transform(
                 self._session_state[streamlit_kwargs["key"]]
             )
+        if streamlit_kwargs["value"] > np.finfo('d').max:
+            streamlit_kwargs["value"] = np.finfo('d').max
+        if streamlit_kwargs["value"] < np.finfo('d').min:
+            streamlit_kwargs["value"] = np.finfo('d').min
 
         if "min_value" in streamlit_kwargs and "max_value" in streamlit_kwargs:
             # TODO: Only if less than X steps
@@ -821,7 +825,7 @@ class InputUI:
                         "init_value": value if value else None,
                         "is_item": True,
                         "readOnly": property.get("readOnly"),
-                        **property["items"],
+                        **schema_utils.get_property_items(property),
                     }
                     return self._render_property(streamlit_app, new_key, new_property)
 
@@ -926,13 +930,16 @@ class InputUI:
         streamlit_app: Any,
         data_list: List[Any],
     ) -> List[Any]:
-        if streamlit_app.button(
-            "Add Item",
-            key=self._key + "-" + key + "list-add-item",
-        ):
-            data_list.append(None)
-
+        try:
+            if streamlit_app.button(
+                "Add Item",
+                key=self._key + "-" + key + "list-add-item",
+            ):
+                data_list.append(None)
+        except Exception as err:
+            logger.error("Can not create button for key %s: %s", key, err)
         return data_list
+
 
     def _render_list_clear_button(
         self,
@@ -940,12 +947,14 @@ class InputUI:
         streamlit_app: Any,
         data_list: List[Any],
     ) -> List[Any]:
-        if streamlit_app.button(
-            "Clear All",
-            key=self._key + "_" + key + "-list_clear-all",
-        ):
-            data_list = []
-
+        try:
+            if streamlit_app.button(
+                "Clear All",
+                key=self._key + "_" + key + "-list_clear-all",
+            ):
+                data_list = []
+        except Exception as err:
+            logger.error("Can not create button for key %s: %s", key, err)
         return data_list
 
     def _render_dict_add_button(
@@ -979,7 +988,7 @@ class InputUI:
         if property.get("description"):
             streamlit_app.markdown(property.get("description"))
 
-        is_object = True if property["items"].get("$ref") else False
+        is_object = True if schema_utils.get_property_items(property).get("$ref") else False
 
         object_list = []
 
@@ -1026,6 +1035,22 @@ class InputUI:
         return object_list
 
     def _render_property(self, streamlit_app: Any, key: str, property: Dict) -> Any:
+        any_of = property.get("anyOf")
+        logger.debug("%s - type: %s - anyOf: %s", property.get("title"), property.get("type"), property.get("anyOf"))
+        if property.get("type") is None and any_of is not None:
+            first_of_any = any_of[0]
+            if "type" in first_of_any:
+                property["type"] = first_of_any["type"]   # Always use the first of the Union as default
+            if "additionalProperties" in first_of_any:
+                property["additionalProperties"] = first_of_any["additionalProperties"]
+        _items = property.get("items", {})
+        if (
+                isinstance(_items, list) and
+                len(_items) > 0 and
+                not _items[0]
+        ):
+            schema_utils.get_property_items(property)["type"] = "string"
+
         if schema_utils.is_single_enum_property(property, self._schema_references):
             return self._render_single_enum_input(streamlit_app, key, property)
 
@@ -1059,10 +1084,7 @@ class InputUI:
         if schema_utils.is_single_object(property, self._schema_references):
             return self._render_single_object_input(streamlit_app, key, property)
 
-        if schema_utils.is_object_list_property(property, self._schema_references):
-            return self._render_list_input(streamlit_app, key, property)
-
-        if schema_utils.is_property_list(property):
+        if schema_utils.is_property_list_and_object(property, self._schema_references):
             return self._render_list_input(streamlit_app, key, property)
 
         if schema_utils.is_single_reference(property):
@@ -1071,11 +1093,18 @@ class InputUI:
         if schema_utils.is_union_property(property):
             return self._render_union_property(streamlit_app, key, property)
 
+        # Let values with no type be handled as raw string input
+        if property.get("type") is None:
+            return self._render_single_string_input(streamlit_app, key, property)
+        # Let custom list be enabled as raw string input
+        if property.get("type") == "array":
+            return self._render_single_string_input(streamlit_app, key, property)
+
         streamlit_app.warning(
             "The type of the following property is currently not supported: "
             + str(property.get("title"))
         )
-        raise Exception("Unsupported property")
+        logger.error(f"Unsupported property: {property}")
 
 
 class OutputUI:
@@ -1172,17 +1201,15 @@ class OutputUI:
                 else:
                     output_data.render_output_ui(streamlit)  # type: ignore
                 return
-        except Exception:
-            # TODO
-            pass
-            # Use default auto-generation methods if the custom rendering throws an exception
+        except Exception as err:
+            raise err#print(f"Exception: {err}")            # Use default auto-generation methods if the custom rendering throws an exception
             # logger.exception(
             #    "Failed to execute custom render_output_ui function. Using auto-generation instead"
             # )
 
         model_schema = output_data.schema(by_alias=False)
         model_properties = model_schema.get("properties")
-        definitions = model_schema.get("$defs")
+        definitions = model_schema.get("definitions")
 
         if model_properties:
             for property_key in output_data.__dict__:
@@ -1275,6 +1302,7 @@ def pydantic_input(
     group_optional_fields: GroupOptionalFieldsStrategy = "no",  # type: ignore
     lowercase_labels: bool = False,
     ignore_empty_values: bool = False,
+    custom_defaults: dict = None
 ) -> Dict:
     """Auto-generates input UI elements for a selected Pydantic class.
 
@@ -1295,6 +1323,7 @@ def pydantic_input(
         group_optional_fields=group_optional_fields,
         lowercase_labels=lowercase_labels,
         ignore_empty_values=ignore_empty_values,
+        custom_defaults=custom_defaults
     ).render_ui()
 
 
