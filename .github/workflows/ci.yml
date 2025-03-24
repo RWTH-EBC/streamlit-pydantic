@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_call:
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rye
+        uses: eifinger/setup-rye@v4
+      - name: Install dependencies
+        run: |
+          rye sync
+          if [[ -n $(git diff --stat requirements.lock) ]]; then
+            echo "requirements.lock has changed. Exiting the workflow."
+            echo "Please run 'rye sync' locally and push the updated lockfile."
+            exit 1
+          fi
+      - name: Run linters
+        run: rye lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rye
+        uses: eifinger/setup-rye@v4
+      - name: Install dependencies
+        run: |
+            rye sync
+            if [[ -n $(git diff --stat requirements.lock) ]]; then
+              echo "requirements.lock has changed. Exiting the workflow."
+              echo "Please run 'rye sync' locally and push the updated lockfile."
+              exit 1
+            fi
+      - name: Run tests
+        run: rye test

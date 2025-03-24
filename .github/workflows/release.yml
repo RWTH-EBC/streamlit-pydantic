@@ -1,0 +1,26 @@
+name: Release on PyPI
+on:
+  release:
+    types: [published]
+jobs:
+  run-tests:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs:
+      - run-tests
+
+    environment:
+      name: release # needed for PyPI OIDC
+      url: https://pypi.org/p/streamlit-pydantic
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rye
+        uses: eifinger/setup-rye@v4
+      - name: Build package
+        run: rye build
+      - name: Publish on PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

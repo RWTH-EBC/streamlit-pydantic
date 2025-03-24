@@ -19,9 +19,7 @@ class SelectionValue(str, Enum):
 
 
 class ExampleModel(BaseModel):
-    """
-    A model to showcase and test different types of pydantic fields with default values"
-    """
+    """A model to showcase & test different types of pydantic fields with default values."""
 
     long_text: str = Field(
         "default string", format="multi-line", description="Unlimited text property"
@@ -61,6 +59,6 @@ class ExampleModel(BaseModel):
     )
 
 
-data = sp.pydantic_input(key="my_input", model=ExampleModel)
+data = sp.pydantic_input(key="my_default_input", model=ExampleModel)
 if data:
     st.json(data)

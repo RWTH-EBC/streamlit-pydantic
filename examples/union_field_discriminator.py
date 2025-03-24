@@ -31,7 +31,7 @@ from_model_tab, from_instance_tab = st.tabs(
 )
 
 with from_model_tab:
-    input_data = sp.pydantic_input(key="union_input", model=ContactMethod)
+    input_data = sp.pydantic_input(key="discriminator_union_input", model=ContactMethod)
     if input_data:
         st.json(input_data)
 
@@ -44,7 +44,9 @@ with from_instance_tab:
         text="instance text",
     )
 
-    instance_input_data = sp.pydantic_input(key="union_input_instance", model=instance)
+    instance_input_data = sp.pydantic_input(
+        key="discriminator_union_input_instance", model=instance
+    )
 
     if instance_input_data:
         st.json(instance_input_data)
