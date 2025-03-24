@@ -147,7 +147,8 @@ class InputUI:
         )
         self._schema_references.update(self._input_class.model_json_schema(by_alias=True).get(
             "$defs", {}
-        ))    def render_ui(self) -> Dict:
+        ))
+    def render_ui(self) -> Dict:
         if _has_input_ui_renderer(self._input_class):
             # The input model has a rendering function
             # The rendering also returns the current state of input data
@@ -807,7 +808,7 @@ class InputUI:
             if property.get("init_value"):
                 new_property["init_value"] = property["init_value"].get(property_key)
             if property.get("default"):
-                new_property["default"] = property["default"].get(property_key)
+                new_property["default"] = json.loads(property["default"]).get(property_key)
 
             new_property["readOnly"] = property.get("readOnly", False)
 
